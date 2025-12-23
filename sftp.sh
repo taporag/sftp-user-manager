@@ -1,19 +1,21 @@
 #!/bin/bash
-# SFTP User Manager (Generic Version)
-# All values are taken from arguments or prompted interactively
+# SFTP User Manager (Group-Based Version)
+# Uses a single SSHD Match Group block instead of per-user blocks
 #
 # Usage:
 #   sudo ./sftp.sh -add [options]
 #   sudo ./sftp.sh -delete [options]
 #   sudo ./sftp.sh -passwd [options]
+#   sudo ./sftp.sh -setup    # One-time setup of group and SSHD config
 #
 # Options:
 #   -u, --username    Username for SFTP account
 #   -p, --password    Password (auto-generated if not provided)
-#   -b, --basedir     Base directory for SFTP jail
-#   -f, --folder      Folder name within base directory
+#   -b, --basedir     Base directory for SFTP jail (must match ChrootDirectory pattern)
 #   -c, --config      Path to sshd_config file
 #   -s, --shell       Path to nologin shell
+#   -g, --group       SFTP users group name
+#   -d, --uploaddir   Upload directory name inside jail
 #   -i, --interactive Run in fully interactive mode (prompt for all values)
 
 # =============================================================================
@@ -23,17 +25,30 @@ DEFAULT_SSHD_CONFIG="${SFTP_SSHD_CONFIG:-/etc/ssh/sshd_config}"
 DEFAULT_BASE_DIR="${SFTP_BASE_DIR:-/sftp}"
 DEFAULT_NOLOGIN_SHELL="${SFTP_NOLOGIN_SHELL:-/usr/sbin/nologin}"
 DEFAULT_UPLOAD_DIR="${SFTP_UPLOAD_DIR:-uploads}"
+DEFAULT_SFTP_GROUP="${SFTP_GROUP:-sftpusers}"
 
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Generate random password
 gen_pass() {
   openssl rand -base64 12
+}
+
+# Reload SSH service (Ubuntu uses 'ssh', others use 'sshd')
+reload_ssh() {
+  if systemctl reload ssh 2>/dev/null; then
+    echo -e "${GREEN}🔄 SSH service reloaded${NC}"
+  elif systemctl reload sshd 2>/dev/null; then
+    echo -e "${GREEN}🔄 SSHD service reloaded${NC}"
+  else
+    echo -e "${YELLOW}⚠️  Could not reload SSH service. Please reload manually.${NC}"
+  fi
 }
 
 # Prompt for input with optional default
@@ -100,10 +115,10 @@ parse_args() {
   USERNAME=""
   PASSWORD=""
   BASE_DIR=""
-  FOLDER=""
   SSHD_CONFIG=""
   NOLOGIN_SHELL=""
   UPLOAD_DIR=""
+  SFTP_GROUP=""
   INTERACTIVE=false
 
   while [[ $# -gt 0 ]]; do
@@ -120,6 +135,10 @@ parse_args() {
         ACTION="passwd"
         shift
         ;;
+      -setup)
+        ACTION="setup"
+        shift
+        ;;
       -u|--username)
         USERNAME="$2"
         shift 2
@@ -132,16 +151,16 @@ parse_args() {
         BASE_DIR="$2"
         shift 2
         ;;
-      -f|--folder)
-        FOLDER="$2"
-        shift 2
-        ;;
       -c|--config)
         SSHD_CONFIG="$2"
         shift 2
         ;;
       -s|--shell)
         NOLOGIN_SHELL="$2"
+        shift 2
+        ;;
+      -g|--group)
+        SFTP_GROUP="$2"
         shift 2
         ;;
       -d|--uploaddir)
@@ -167,7 +186,10 @@ parse_args() {
 
 # Show help
 show_help() {
-  echo "SFTP User Manager"
+  echo "SFTP User Manager (Group-Based)"
+  echo ""
+  echo "This script uses a single Match Group block in sshd_config instead of"
+  echo "per-user blocks. All SFTP users are added to a common group."
   echo ""
   echo "Usage:"
   echo "  sudo $0 <action> [options]"
@@ -176,14 +198,15 @@ show_help() {
   echo "  -add        Add a new SFTP user"
   echo "  -delete     Delete an existing SFTP user"
   echo "  -passwd     Update password for an existing user"
+  echo "  -setup      One-time setup: create group and add SSHD config block"
   echo ""
   echo "Options:"
-  echo "  -u, --username    Username for SFTP account (required)"
+  echo "  -u, --username    Username for SFTP account (required for add/delete/passwd)"
   echo "  -p, --password    Password (auto-generated if not provided)"
   echo "  -b, --basedir     Base directory for SFTP jail (default: $DEFAULT_BASE_DIR)"
-  echo "  -f, --folder      Folder name within base directory (default: username)"
   echo "  -c, --config      Path to sshd_config file (default: $DEFAULT_SSHD_CONFIG)"
   echo "  -s, --shell       Path to nologin shell (default: $DEFAULT_NOLOGIN_SHELL)"
+  echo "  -g, --group       SFTP users group name (default: $DEFAULT_SFTP_GROUP)"
   echo "  -d, --uploaddir   Upload directory name (default: $DEFAULT_UPLOAD_DIR)"
   echo "  -i, --interactive Run in fully interactive mode"
   echo "  -h, --help        Show this help message"
@@ -193,22 +216,163 @@ show_help() {
   echo "  SFTP_SSHD_CONFIG   Default sshd_config path"
   echo "  SFTP_NOLOGIN_SHELL Default nologin shell path"
   echo "  SFTP_UPLOAD_DIR    Default upload directory name"
+  echo "  SFTP_GROUP         Default SFTP users group name"
+  echo ""
+  echo "Directory Structure:"
+  echo "  <basedir>/<username>/uploads"
+  echo "  Example: /sftp/john/uploads"
+  echo ""
+  echo "  The SSHD ChrootDirectory uses: <basedir>/%u"
+  echo "  This means each user is jailed to their own directory."
   echo ""
   echo "Examples:"
-  echo "  # Add user with defaults (prompts for username only)"
+  echo "  # Initial setup (run once)"
+  echo "  sudo $0 -setup"
+  echo ""
+  echo "  # Add user with defaults"
   echo "  sudo $0 -add -u john"
   echo ""
   echo "  # Add user with custom base directory"
   echo "  sudo $0 -add -u john -b /data/sftp"
-  echo ""
-  echo "  # Add user in fully interactive mode"
-  echo "  sudo $0 -add -i"
   echo ""
   echo "  # Delete user"
   echo "  sudo $0 -delete -u john"
   echo ""
   echo "  # Update password"
   echo "  sudo $0 -passwd -u john"
+  echo ""
+  echo "Security Notes:"
+  echo "  - Global SSHD config should have: PasswordAuthentication no"
+  echo "  - The Match Group block enables password auth ONLY for SFTP users"
+  echo "  - Admin SSH access remains key-only"
+}
+
+# Apply defaults to variables
+apply_defaults() {
+  if [ -z "$BASE_DIR" ]; then
+    BASE_DIR="$DEFAULT_BASE_DIR"
+  fi
+  if [ -z "$SSHD_CONFIG" ]; then
+    SSHD_CONFIG="$DEFAULT_SSHD_CONFIG"
+  fi
+  if [ -z "$NOLOGIN_SHELL" ]; then
+    NOLOGIN_SHELL="$DEFAULT_NOLOGIN_SHELL"
+  fi
+  if [ -z "$UPLOAD_DIR" ]; then
+    UPLOAD_DIR="$DEFAULT_UPLOAD_DIR"
+  fi
+  if [ -z "$SFTP_GROUP" ]; then
+    SFTP_GROUP="$DEFAULT_SFTP_GROUP"
+  fi
+}
+
+# Ensure the SFTP group exists
+ensure_group() {
+  if ! getent group "$SFTP_GROUP" &>/dev/null; then
+    groupadd "$SFTP_GROUP"
+    echo -e "${GREEN}✅ Created group '$SFTP_GROUP'${NC}"
+  else
+    echo -e "${CYAN}ℹ️  Group '$SFTP_GROUP' already exists${NC}"
+  fi
+}
+
+# Ensure base directory exists with correct permissions
+ensure_base_dir() {
+  if [ ! -d "$BASE_DIR" ]; then
+    mkdir -p "$BASE_DIR"
+    echo -e "${GREEN}✅ Created base directory '$BASE_DIR'${NC}"
+  fi
+  chown root:root "$BASE_DIR"
+  chmod 755 "$BASE_DIR"
+}
+
+# Add Match Group block to sshd_config (only once)
+ensure_sshd_group_config() {
+  local config_marker="# SFTP group config ($SFTP_GROUP)"
+  
+  if grep -q "$config_marker" "$SSHD_CONFIG"; then
+    echo -e "${CYAN}ℹ️  SSHD Match Group block already exists${NC}"
+    return 0
+  fi
+
+  echo -e "${BLUE}Adding Match Group block to $SSHD_CONFIG...${NC}"
+  
+  cat >> "$SSHD_CONFIG" <<EOF
+
+$config_marker
+Match Group $SFTP_GROUP
+    ChrootDirectory $BASE_DIR/%u
+    ForceCommand internal-sftp -d $UPLOAD_DIR
+    PasswordAuthentication yes
+    PermitTunnel no
+    AllowAgentForwarding no
+    AllowTcpForwarding no
+    X11Forwarding no
+EOF
+
+  echo -e "${GREEN}✅ Added Match Group block for '$SFTP_GROUP'${NC}"
+  
+  # Validate sshd config
+  if sshd -t 2>/dev/null; then
+    echo -e "${GREEN}✅ SSHD config syntax is valid${NC}"
+  else
+    echo -e "${RED}❌ SSHD config syntax error! Please check $SSHD_CONFIG${NC}"
+    exit 1
+  fi
+}
+
+# One-time setup
+setup() {
+  echo -e "${BLUE}=== SFTP Initial Setup ===${NC}"
+  echo ""
+  
+  # Apply defaults
+  apply_defaults
+  
+  # Interactive mode for setup
+  if [ "$INTERACTIVE" = true ]; then
+    BASE_DIR=$(prompt_input "Enter base directory" "$BASE_DIR")
+    SSHD_CONFIG=$(prompt_input "Enter sshd_config path" "$SSHD_CONFIG")
+    SFTP_GROUP=$(prompt_input "Enter SFTP group name" "$SFTP_GROUP")
+    UPLOAD_DIR=$(prompt_input "Enter upload directory name" "$UPLOAD_DIR")
+  fi
+
+  # Display summary
+  echo -e "${BLUE}Setup Configuration:${NC}"
+  echo "  Base Directory:   $BASE_DIR"
+  echo "  SSHD Config:      $SSHD_CONFIG"
+  echo "  SFTP Group:       $SFTP_GROUP"
+  echo "  Upload Directory: $UPLOAD_DIR"
+  echo ""
+  echo -e "${CYAN}This will:${NC}"
+  echo "  1. Create the SFTP group '$SFTP_GROUP'"
+  echo "  2. Create the base directory '$BASE_DIR'"
+  echo "  3. Add a Match Group block to '$SSHD_CONFIG'"
+  echo ""
+
+  if ! confirm_action "Proceed with setup?"; then
+    echo -e "${YELLOW}⚠️  Setup cancelled${NC}"
+    exit 0
+  fi
+
+  # Validate sshd_config exists
+  if [ ! -f "$SSHD_CONFIG" ]; then
+    echo -e "${RED}❌ SSHD config file not found: $SSHD_CONFIG${NC}"
+    exit 1
+  fi
+
+  # Perform setup
+  ensure_group
+  ensure_base_dir
+  ensure_sshd_group_config
+  reload_ssh
+
+  echo ""
+  echo -e "${GREEN}✅ Setup complete!${NC}"
+  echo ""
+  echo -e "${CYAN}Next steps:${NC}"
+  echo "  1. Add users with: sudo $0 -add -u <username>"
+  echo "  2. Users connect via: sftp <username>@<your-server>"
 }
 
 # Add SFTP User
@@ -216,48 +380,20 @@ add_user() {
   echo -e "${BLUE}=== Add SFTP User ===${NC}"
   echo ""
 
+  # Apply defaults
+  apply_defaults
+
   # Prompt for missing values (username is always required)
   if [ -z "$USERNAME" ] || [ "$INTERACTIVE" = true ]; then
     USERNAME=$(prompt_required "Enter username")
   fi
 
-  # Base directory - use default if not provided
-  if [ -z "$BASE_DIR" ]; then
-    BASE_DIR="$DEFAULT_BASE_DIR"
-  fi
+  # Interactive prompts for other values
   if [ "$INTERACTIVE" = true ]; then
     BASE_DIR=$(prompt_input "Enter base directory" "$BASE_DIR")
-  fi
-
-  # Folder - defaults to username
-  if [ -z "$FOLDER" ]; then
-    FOLDER="$USERNAME"
-  fi
-  if [ "$INTERACTIVE" = true ]; then
-    FOLDER=$(prompt_input "Enter folder name" "$FOLDER")
-  fi
-
-  # SSHD config - use default if not provided
-  if [ -z "$SSHD_CONFIG" ]; then
-    SSHD_CONFIG="$DEFAULT_SSHD_CONFIG"
-  fi
-  if [ "$INTERACTIVE" = true ]; then
     SSHD_CONFIG=$(prompt_input "Enter sshd_config path" "$SSHD_CONFIG")
-  fi
-
-  # Nologin shell - use default if not provided
-  if [ -z "$NOLOGIN_SHELL" ]; then
-    NOLOGIN_SHELL="$DEFAULT_NOLOGIN_SHELL"
-  fi
-  if [ "$INTERACTIVE" = true ]; then
+    SFTP_GROUP=$(prompt_input "Enter SFTP group name" "$SFTP_GROUP")
     NOLOGIN_SHELL=$(prompt_input "Enter nologin shell path" "$NOLOGIN_SHELL")
-  fi
-
-  # Upload directory - use default if not provided
-  if [ -z "$UPLOAD_DIR" ]; then
-    UPLOAD_DIR="$DEFAULT_UPLOAD_DIR"
-  fi
-  if [ "$INTERACTIVE" = true ]; then
     UPLOAD_DIR=$(prompt_input "Enter upload directory name" "$UPLOAD_DIR")
   fi
 
@@ -273,17 +409,15 @@ add_user() {
     echo -e "${YELLOW}📝 Auto-generated password${NC}"
   fi
 
-  USER_HOME="$BASE_DIR/$FOLDER"
+  USER_HOME="$BASE_DIR/$USERNAME"
 
   # Display summary
   echo ""
   echo -e "${BLUE}Summary:${NC}"
   echo "  Username:         $USERNAME"
-  echo "  Base Directory:   $BASE_DIR"
-  echo "  Folder:           $FOLDER"
+  echo "  SFTP Group:       $SFTP_GROUP"
   echo "  Home Directory:   $USER_HOME"
   echo "  Upload Directory: $USER_HOME/$UPLOAD_DIR"
-  echo "  SSHD Config:      $SSHD_CONFIG"
   echo "  Nologin Shell:    $NOLOGIN_SHELL"
   echo ""
 
@@ -311,33 +445,33 @@ add_user() {
     exit 1
   fi
 
+  # Ensure group exists
+  ensure_group
+
+  # Ensure SSHD group config exists
+  ensure_sshd_group_config
+
+  # Ensure base directory exists
+  ensure_base_dir
+
   # Create user with no shell
   useradd -M -d "$USER_HOME" -s "$NOLOGIN_SHELL" "$USERNAME"
   echo "$USERNAME:$PASSWORD" | chpasswd
 
-  # Setup jail dirs
+  # Add user to SFTP group
+  usermod -aG "$SFTP_GROUP" "$USERNAME"
+  echo -e "${GREEN}✅ Added '$USERNAME' to group '$SFTP_GROUP'${NC}"
+
+  # Setup user jail directory
+  # /sftp/<username> -> owned by root:root, 755 (required for chroot)
+  # /sftp/<username>/uploads -> owned by user:user, 755 (writable by user)
   mkdir -p "$USER_HOME/$UPLOAD_DIR"
   chown root:root "$USER_HOME"
   chmod 755 "$USER_HOME"
   chown "$USERNAME:$USERNAME" "$USER_HOME/$UPLOAD_DIR"
+  chmod 755 "$USER_HOME/$UPLOAD_DIR"
 
-  # Add SSHD config block
-  if ! grep -q "Match User $USERNAME" "$SSHD_CONFIG"; then
-    cat >> "$SSHD_CONFIG" <<EOF
-
-# SFTP config for $USERNAME
-Match User $USERNAME
-    ForceCommand internal-sftp -d $UPLOAD_DIR
-    ChrootDirectory $USER_HOME
-    PasswordAuthentication yes
-    PermitTunnel no
-    AllowAgentForwarding no
-    AllowTcpForwarding no
-    X11Forwarding no
-EOF
-  fi
-
-  systemctl reload sshd
+  reload_ssh
 
   echo ""
   echo -e "${GREEN}✅ SFTP user created successfully${NC}"
@@ -345,7 +479,10 @@ EOF
   echo "Username:       $USERNAME"
   echo "Password:       $PASSWORD"
   echo "Home Directory: $USER_HOME/$UPLOAD_DIR"
+  echo "SFTP Group:     $SFTP_GROUP"
   echo "======================================="
+  echo ""
+  echo -e "${CYAN}Connect with:${NC} sftp $USERNAME@<your-server>"
 }
 
 # Delete SFTP User
@@ -353,43 +490,26 @@ delete_user() {
   echo -e "${BLUE}=== Delete SFTP User ===${NC}"
   echo ""
 
+  # Apply defaults
+  apply_defaults
+
   # Prompt for missing values (username is always required)
   if [ -z "$USERNAME" ] || [ "$INTERACTIVE" = true ]; then
     USERNAME=$(prompt_required "Enter username to delete")
   fi
 
-  # Base directory - use default if not provided
-  if [ -z "$BASE_DIR" ]; then
-    BASE_DIR="$DEFAULT_BASE_DIR"
-  fi
+  # Interactive prompts
   if [ "$INTERACTIVE" = true ]; then
     BASE_DIR=$(prompt_input "Enter base directory" "$BASE_DIR")
   fi
 
-  # Folder - defaults to username
-  if [ -z "$FOLDER" ]; then
-    FOLDER="$USERNAME"
-  fi
-  if [ "$INTERACTIVE" = true ]; then
-    FOLDER=$(prompt_input "Enter folder name" "$FOLDER")
-  fi
-
-  # SSHD config - use default if not provided
-  if [ -z "$SSHD_CONFIG" ]; then
-    SSHD_CONFIG="$DEFAULT_SSHD_CONFIG"
-  fi
-  if [ "$INTERACTIVE" = true ]; then
-    SSHD_CONFIG=$(prompt_input "Enter sshd_config path" "$SSHD_CONFIG")
-  fi
-
-  USER_HOME="$BASE_DIR/$FOLDER"
+  USER_HOME="$BASE_DIR/$USERNAME"
 
   # Display summary
   echo ""
   echo -e "${BLUE}Summary:${NC}"
   echo "  Username:       $USERNAME"
   echo "  Home Directory: $USER_HOME"
-  echo "  SSHD Config:    $SSHD_CONFIG"
   echo ""
 
   echo -e "${RED}⚠️  WARNING: This will permanently delete the user and their data!${NC}"
@@ -398,9 +518,9 @@ delete_user() {
     exit 0
   fi
 
-  # Delete user account
+  # Delete user account (also removes from all groups)
   if id "$USERNAME" &>/dev/null; then
-    userdel -r "$USERNAME" 2>/dev/null
+    userdel "$USERNAME" 2>/dev/null
     echo -e "${GREEN}🗑️  User '$USERNAME' removed${NC}"
   else
     echo -e "${YELLOW}⚠️  User '$USERNAME' does not exist${NC}"
@@ -412,15 +532,8 @@ delete_user() {
     echo -e "${GREEN}🧹 Removed folder $USER_HOME${NC}"
   fi
 
-  # Remove SSHD config block for this user
-  if [ -f "$SSHD_CONFIG" ] && grep -q "# SFTP config for $USERNAME" "$SSHD_CONFIG"; then
-    sed -i "/# SFTP config for $USERNAME/,/X11Forwarding no/d" "$SSHD_CONFIG"
-    echo -e "${GREEN}🧾 Removed SSHD config block for $USERNAME${NC}"
-  else
-    echo -e "${YELLOW}⚠️  No SSHD config block found for $USERNAME${NC}"
-  fi
-
-  systemctl reload sshd
+  # Note: We do NOT modify sshd_config - the Match Group block stays
+  echo -e "${CYAN}ℹ️  SSHD config unchanged (group-based access)${NC}"
 
   echo ""
   echo -e "${GREEN}✅ SFTP user '$USERNAME' fully removed${NC}"
@@ -474,19 +587,21 @@ interactive_menu() {
   echo -e "${BLUE}=== SFTP User Manager ===${NC}"
   echo ""
   echo "Select an action:"
-  echo "  1) Add user"
-  echo "  2) Delete user"
-  echo "  3) Update password"
-  echo "  4) Exit"
+  echo "  1) Initial setup (run once)"
+  echo "  2) Add user"
+  echo "  3) Delete user"
+  echo "  4) Update password"
+  echo "  5) Exit"
   echo ""
 
-  read -p "Enter choice [1-4]: " choice
+  read -p "Enter choice [1-5]: " choice
 
   case "$choice" in
-    1) ACTION="add" ;;
-    2) ACTION="delete" ;;
-    3) ACTION="passwd" ;;
-    4) echo "Goodbye!"; exit 0 ;;
+    1) ACTION="setup" ;;
+    2) ACTION="add" ;;
+    3) ACTION="delete" ;;
+    4) ACTION="passwd" ;;
+    5) echo "Goodbye!"; exit 0 ;;
     *) echo -e "${RED}❌ Invalid choice${NC}"; exit 1 ;;
   esac
 }
@@ -501,6 +616,9 @@ if [ -z "$ACTION" ]; then
 fi
 
 case "$ACTION" in
+  setup)
+    setup
+    ;;
   add)
     add_user
     ;;
