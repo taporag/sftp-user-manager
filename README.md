@@ -8,7 +8,7 @@ A flexible, production-safe bash script for managing SFTP-only user accounts wit
 - 👥 **Group-based access control** - Single SSHD config block for all SFTP users (no per-user config spam)
 - 🔑 **SSH hardening compatible** - Works with global `PasswordAuthentication no`
 - 🎯 **No hardcoded values** - Fully configurable via arguments, prompts, or environment variables
-- 🔄 **Interactive mode** - User-friendly prompts for all operations
+- 🔄 **Interactive configuration** - Always shows defaults and lets you override before proceeding
 - 🎨 **Colored output** - Clear visual feedback for operations
 - ✅ **Idempotent** - Can be run repeatedly without duplicating config
 - 🔑 **Auto-generate passwords** - Secure random password generation using OpenSSL
@@ -54,19 +54,70 @@ chmod +x sftp.sh
 sudo ./sftp.sh -setup
 ```
 
+You'll see the current configuration and can override any settings:
+
+```
+=== SFTP Initial Setup ===
+
+Current Configuration (defaults):
+  1) Base Directory:   /sftp
+  2) SSHD Config:      /etc/ssh/sshd_config
+  3) SFTP Group:       sftpusers
+  4) Upload Directory: uploads
+
+Would you like to change any of these settings? [y/N]: y
+
+Base directory [/sftp]: /data/sftp
+SSHD config path [/etc/ssh/sshd_config]: 
+SFTP group name [sftpusers]: mycompany-sftp
+Upload directory name [uploads]: 
+
+Final Configuration:
+  Base Directory:   /data/sftp
+  SSHD Config:      /etc/ssh/sshd_config
+  SFTP Group:       mycompany-sftp
+  Upload Directory: uploads
+
 This will:
-- Create the `sftpusers` group
-- Create the base directory `/sftp`
-- Add the Match Group block to `/etc/ssh/sshd_config`
+  1. Create the SFTP group 'mycompany-sftp'
+  2. Create the base directory '/data/sftp'
+  3. Add a Match Group block to '/etc/ssh/sshd_config'
+
+Proceed with setup? [y/N]: y
+```
 
 ### 2. Add SFTP Users
 
 ```bash
-# Add a user (password auto-generated)
 sudo ./sftp.sh -add -u john
+```
 
-# Add a user with specific password
-sudo ./sftp.sh -add -u john -p "SecurePass123"
+You can override any settings before the user is created:
+
+```
+=== Add SFTP User ===
+
+Current Configuration:
+  Username:         john
+  Base Directory:   /sftp
+  SFTP Group:       sftpusers
+  Upload Directory: uploads
+  Nologin Shell:    /usr/sbin/nologin
+
+Would you like to change any settings? [y/N]: n
+
+Leave password empty to auto-generate
+Enter password []: 
+📝 Auto-generated password
+
+Final Configuration:
+  Username:         john
+  SFTP Group:       sftpusers
+  Home Directory:   /sftp/john
+  Upload Directory: /sftp/john/uploads
+  Nologin Shell:    /usr/sbin/nologin
+
+Proceed with creating user? [y/N]: y
 ```
 
 ### 3. Users Connect via SFTP
@@ -77,7 +128,7 @@ sftp john@your-server.com
 
 ## Usage
 
-### Interactive Mode (Recommended for beginners)
+### Interactive Mode (Recommended)
 
 Simply run the script without arguments:
 
@@ -98,34 +149,39 @@ Select an action:
   5) Exit
 ```
 
+Every operation shows you the current configuration and asks if you want to change any settings before proceeding.
+
 ### Command Line Mode
+
+You can also pass arguments directly. The script will still show the configuration and let you override if needed.
 
 #### Initial Setup
 
 ```bash
+# With defaults (will prompt to change)
 sudo ./sftp.sh -setup
+
+# Pre-set values via arguments
+sudo ./sftp.sh -setup -b /data/sftp -g mycompany-sftp
 ```
 
 #### Add a new SFTP user
 
 ```bash
-# Simplest usage - uses all defaults
+# Basic usage
 sudo ./sftp.sh -add -u john
 
-# With custom base directory
-sudo ./sftp.sh -add -u john -b /data/sftp
+# With pre-set values
+sudo ./sftp.sh -add -u john -b /data/sftp -g mycompany-sftp
 
 # With specific password
 sudo ./sftp.sh -add -u john -p "MySecurePass123"
-
-# With custom group
-sudo ./sftp.sh -add -u john -g mycompany-sftp
 ```
 
 #### Delete an SFTP user
 
 ```bash
-# Uses defaults for base directory
+# Basic usage
 sudo ./sftp.sh -delete -u john
 
 # With custom base directory
@@ -153,7 +209,7 @@ sudo ./sftp.sh -passwd -u john -p "NewPassword123"
 | `-s` | `--shell` | `/usr/sbin/nologin` | Path to nologin shell |
 | `-g` | `--group` | `sftpusers` | SFTP users group name |
 | `-d` | `--uploaddir` | `uploads` | Upload directory name inside jail |
-| `-i` | `--interactive` | `false` | Force interactive mode |
+| `-i` | `--interactive` | `false` | Force full interactive mode |
 | `-h` | `--help` | - | Show help message |
 
 ### Environment Variables
