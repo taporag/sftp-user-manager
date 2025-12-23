@@ -1,19 +1,34 @@
 # SFTP User Manager
 
-A flexible, interactive bash script for managing SFTP-only user accounts with chroot jail isolation on Linux servers.
+A flexible, production-safe bash script for managing SFTP-only user accounts with chroot jail isolation on Linux servers.
 
 ## Features
 
 - 🔐 **Secure SFTP-only access** - Users are jailed to their home directory with no shell access
-- 🎯 **No hardcoded values** - Fully configurable via arguments or interactive prompts
+- 👥 **Group-based access control** - Single SSHD config block for all SFTP users (no per-user config spam)
+- 🔑 **SSH hardening compatible** - Works with global `PasswordAuthentication no`
+- 🎯 **No hardcoded values** - Fully configurable via arguments, prompts, or environment variables
 - 🔄 **Interactive mode** - User-friendly prompts for all operations
 - 🎨 **Colored output** - Clear visual feedback for operations
-- ✅ **Confirmation prompts** - Safety checks before destructive actions
+- ✅ **Idempotent** - Can be run repeatedly without duplicating config
 - 🔑 **Auto-generate passwords** - Secure random password generation using OpenSSL
+
+## How It Works
+
+Instead of adding per-user `Match User` blocks to `sshd_config`, this script:
+
+1. Creates a single group (`sftpusers` by default)
+2. Adds ONE `Match Group` block to `sshd_config`
+3. Adds each SFTP user to the group
+
+This approach is:
+- **Maintainable** - No config file bloat
+- **Secure** - Enables password auth only for SFTP users
+- **Scalable** - Add/remove users without touching SSHD config
 
 ## Prerequisites
 
-- Linux server with SSH/SFTP enabled
+- Linux server (Ubuntu/Debian recommended)
 - Root or sudo access
 - OpenSSL (for password generation)
 - systemd (for SSH service management)
@@ -31,55 +46,86 @@ cd sftp-user-manager
 chmod +x sftp.sh
 ```
 
+## Quick Start
+
+### 1. Initial Setup (Run Once)
+
+```bash
+sudo ./sftp.sh -setup
+```
+
+This will:
+- Create the `sftpusers` group
+- Create the base directory `/sftp`
+- Add the Match Group block to `/etc/ssh/sshd_config`
+
+### 2. Add SFTP Users
+
+```bash
+# Add a user (password auto-generated)
+sudo ./sftp.sh -add -u john
+
+# Add a user with specific password
+sudo ./sftp.sh -add -u john -p "SecurePass123"
+```
+
+### 3. Users Connect via SFTP
+
+```bash
+sftp john@your-server.com
+```
+
 ## Usage
 
 ### Interactive Mode (Recommended for beginners)
 
-Simply run the script without arguments to enter fully interactive mode:
+Simply run the script without arguments:
 
 ```bash
 sudo ./sftp.sh
 ```
 
-You'll see a menu to select your action:
+You'll see a menu:
 
 ```
 === SFTP User Manager ===
 
 Select an action:
-  1) Add user
-  2) Delete user
-  3) Update password
-  4) Exit
-
-Enter choice [1-4]:
+  1) Initial setup (run once)
+  2) Add user
+  3) Delete user
+  4) Update password
+  5) Exit
 ```
 
 ### Command Line Mode
 
+#### Initial Setup
+
+```bash
+sudo ./sftp.sh -setup
+```
+
 #### Add a new SFTP user
 
 ```bash
-# Simplest usage - uses all defaults (base: /sftp, config: /etc/ssh/sshd_config)
+# Simplest usage - uses all defaults
 sudo ./sftp.sh -add -u john
 
 # With custom base directory
 sudo ./sftp.sh -add -u john -b /data/sftp
 
-# With custom folder name
-sudo ./sftp.sh -add -u john -f john_files
-
 # With specific password
 sudo ./sftp.sh -add -u john -p "MySecurePass123"
 
-# Override all defaults
-sudo ./sftp.sh -add -u john -b /data/sftp -f john_home -c /etc/openssh/sshd_config -d files
+# With custom group
+sudo ./sftp.sh -add -u john -g mycompany-sftp
 ```
 
 #### Delete an SFTP user
 
 ```bash
-# Uses defaults for base directory and config path
+# Uses defaults for base directory
 sudo ./sftp.sh -delete -u john
 
 # With custom base directory
@@ -103,16 +149,16 @@ sudo ./sftp.sh -passwd -u john -p "NewPassword123"
 | `-u` | `--username` | *(required)* | Username for SFTP account |
 | `-p` | `--password` | *(auto-generated)* | Password for the account |
 | `-b` | `--basedir` | `/sftp` | Base directory for SFTP jail |
-| `-f` | `--folder` | *(username)* | Folder name within base directory |
 | `-c` | `--config` | `/etc/ssh/sshd_config` | Path to sshd_config file |
 | `-s` | `--shell` | `/usr/sbin/nologin` | Path to nologin shell |
+| `-g` | `--group` | `sftpusers` | SFTP users group name |
 | `-d` | `--uploaddir` | `uploads` | Upload directory name inside jail |
-| `-i` | `--interactive` | `false` | Force interactive mode for all prompts |
+| `-i` | `--interactive` | `false` | Force interactive mode |
 | `-h` | `--help` | - | Show help message |
 
 ### Environment Variables
 
-You can set these environment variables to override the defaults system-wide:
+Override defaults system-wide:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -120,12 +166,13 @@ You can set these environment variables to override the defaults system-wide:
 | `SFTP_SSHD_CONFIG` | `/etc/ssh/sshd_config` | Default sshd_config path |
 | `SFTP_NOLOGIN_SHELL` | `/usr/sbin/nologin` | Default nologin shell path |
 | `SFTP_UPLOAD_DIR` | `uploads` | Default upload directory name |
+| `SFTP_GROUP` | `sftpusers` | Default SFTP users group |
 
-Example using environment variables:
+Example:
 
 ```bash
 export SFTP_BASE_DIR="/data/sftp"
-export SFTP_SSHD_CONFIG="/etc/openssh/sshd_config"
+export SFTP_GROUP="company-sftp"
 sudo -E ./sftp.sh -add -u john
 ```
 
@@ -134,82 +181,102 @@ sudo -E ./sftp.sh -add -u john
 When you create an SFTP user, the following structure is created:
 
 ```
-<base_dir>/
-└── <folder>/           # Owned by root (chroot requirement)
-    └── uploads/        # Owned by user (writable)
+/sftp/                      # Base directory (root:root, 755)
+└── john/                   # User's chroot jail (root:root, 755)
+    └── uploads/            # User's writable directory (john:john, 755)
 ```
 
-Example with `sudo ./sftp.sh -add -u john`:
+The SSHD `ChrootDirectory` uses the pattern `/sftp/%u`, where `%u` is replaced with the username.
+
+## SSHD Configuration
+
+After running `-setup`, your `sshd_config` will contain:
 
 ```
-/sftp/
-└── john/               # Chroot jail (root:root, 755)
-    └── uploads/        # User's writable directory (john:john)
+# SFTP group config (sftpusers)
+Match Group sftpusers
+    ChrootDirectory /sftp/%u
+    ForceCommand internal-sftp -d uploads
+    PasswordAuthentication yes
+    PermitTunnel no
+    AllowAgentForwarding no
+    AllowTcpForwarding no
+    X11Forwarding no
 ```
 
-## How It Works
+### Recommended Global SSHD Hardening
 
-1. **User Creation**: Creates a system user with no login shell (`/usr/sbin/nologin`)
-2. **Directory Setup**: Creates a chroot jail with proper ownership for SFTP
-3. **SSH Configuration**: Adds a `Match User` block to `sshd_config` with:
-   - `ForceCommand internal-sftp` - Only allows SFTP, no shell
-   - `ChrootDirectory` - Jails user to their home directory
-   - Disabled tunneling, agent forwarding, TCP forwarding, and X11
+Your global `sshd_config` should have:
 
-## Connecting via SFTP
-
-Once a user is created, they can connect using any SFTP client:
-
-```bash
-sftp username@your-server-ip
+```
+PermitRootLogin no
+PasswordAuthentication no
 ```
 
-They will be automatically placed in the `uploads` directory where they can read/write files.
+The `Match Group` block re-enables password authentication **only** for SFTP users.
+Admin SSH access remains key-only.
 
 ## Security Considerations
 
-- Users are completely isolated in their chroot jail
-- No shell access is possible (even if attempted)
-- Users can only access their designated `uploads` folder
-- Password authentication is enabled per-user (can be customized)
-- All tunneling and forwarding capabilities are disabled
+- ✅ Users are completely isolated in their chroot jail
+- ✅ No shell access is possible (even if attempted)
+- ✅ Users can only access their designated `uploads` folder
+- ✅ Password authentication enabled ONLY for SFTP group
+- ✅ Admin SSH access remains key-based only
+- ✅ All tunneling and forwarding capabilities are disabled
 
 ## Troubleshooting
 
 ### "User already exists" error
-The user account already exists on the system. Delete it first or choose a different username.
+The user account already exists. Delete it first or choose a different username.
 
 ### "SSHD config file not found" error
-Verify the path to your SSH daemon configuration file. Common locations:
+Verify the path to your SSH daemon configuration file:
 - `/etc/ssh/sshd_config` (most Linux distributions)
 - `/etc/openssh/sshd_config` (some systems)
 
-### SFTP connection fails after user creation
-1. Check SSH service status: `sudo systemctl status sshd`
+### SFTP connection fails
+1. Check SSH service status: `sudo systemctl status ssh`
 2. Verify the sshd_config syntax: `sudo sshd -t`
-3. Check directory permissions:
-   - Chroot directory must be owned by `root:root` with `755`
-   - `uploads` directory must be owned by the user
+3. Ensure user is in the SFTP group: `groups username`
+4. Check directory permissions:
+   - `/sftp` must be owned by `root:root` with `755`
+   - `/sftp/<username>` must be owned by `root:root` with `755`
+   - `/sftp/<username>/uploads` must be owned by `username:username`
 
 ### Permission denied when uploading files
 Ensure the user owns the `uploads` directory:
 ```bash
-sudo chown username:username /base_dir/folder/uploads
+sudo chown username:username /sftp/username/uploads
 ```
+
+### Admin can't SSH after setup
+The Match Group block should not affect admin SSH access. Verify:
+1. Your admin user is NOT in the `sftpusers` group
+2. Global `PasswordAuthentication no` is set before any Match blocks
+3. Your SSH key authentication is working
+
+## Migration from Per-User Config
+
+If you have existing per-user `Match User` blocks:
+
+1. Run the setup: `sudo ./sftp.sh -setup`
+2. Manually remove old `Match User` blocks from `sshd_config`
+3. Add existing users to the group: `sudo usermod -aG sftpusers <username>`
+4. Reload SSH: `sudo systemctl reload ssh`
 
 ## Uninstalling
 
-To completely remove a user and clean up:
-
+To remove a user:
 ```bash
-sudo ./sftp.sh -delete -u <username> -b <base_dir> -c <sshd_config_path>
+sudo ./sftp.sh -delete -u <username>
 ```
 
-This will:
-- Delete the user account
-- Remove the user's home directory
-- Remove the SSH configuration block
-- Reload the SSH service
+To completely remove the SFTP setup:
+1. Delete all SFTP users
+2. Remove the Match Group block from `sshd_config`
+3. Delete the group: `sudo groupdel sftpusers`
+4. Remove the base directory: `sudo rm -rf /sftp`
 
 ## Contributing
 
@@ -227,9 +294,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## Author
 
-Built with ❤️ for easy SFTP user management.
+Built with ❤️ for easy and secure SFTP user management.
 
 ---
 
 **⭐ If you find this useful, please consider giving it a star!**
-
