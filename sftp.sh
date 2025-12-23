@@ -329,16 +329,26 @@ setup() {
   # Apply defaults
   apply_defaults
   
-  # Interactive mode for setup
-  if [ "$INTERACTIVE" = true ]; then
-    BASE_DIR=$(prompt_input "Enter base directory" "$BASE_DIR")
-    SSHD_CONFIG=$(prompt_input "Enter sshd_config path" "$SSHD_CONFIG")
-    SFTP_GROUP=$(prompt_input "Enter SFTP group name" "$SFTP_GROUP")
-    UPLOAD_DIR=$(prompt_input "Enter upload directory name" "$UPLOAD_DIR")
+  # Display current configuration
+  echo -e "${BLUE}Current Configuration (defaults):${NC}"
+  echo "  1) Base Directory:   $BASE_DIR"
+  echo "  2) SSHD Config:      $SSHD_CONFIG"
+  echo "  3) SFTP Group:       $SFTP_GROUP"
+  echo "  4) Upload Directory: $UPLOAD_DIR"
+  echo ""
+
+  # Ask if user wants to change configuration
+  if confirm_action "Would you like to change any of these settings?"; then
+    echo ""
+    BASE_DIR=$(prompt_input "Base directory" "$BASE_DIR")
+    SSHD_CONFIG=$(prompt_input "SSHD config path" "$SSHD_CONFIG")
+    SFTP_GROUP=$(prompt_input "SFTP group name" "$SFTP_GROUP")
+    UPLOAD_DIR=$(prompt_input "Upload directory name" "$UPLOAD_DIR")
+    echo ""
   fi
 
-  # Display summary
-  echo -e "${BLUE}Setup Configuration:${NC}"
+  # Display final summary
+  echo -e "${BLUE}Final Configuration:${NC}"
   echo "  Base Directory:   $BASE_DIR"
   echo "  SSHD Config:      $SSHD_CONFIG"
   echo "  SFTP Group:       $SFTP_GROUP"
@@ -383,22 +393,33 @@ add_user() {
   # Apply defaults
   apply_defaults
 
-  # Prompt for missing values (username is always required)
-  if [ -z "$USERNAME" ] || [ "$INTERACTIVE" = true ]; then
+  # Prompt for username (always required)
+  if [ -z "$USERNAME" ]; then
     USERNAME=$(prompt_required "Enter username")
   fi
 
-  # Interactive prompts for other values
-  if [ "$INTERACTIVE" = true ]; then
-    BASE_DIR=$(prompt_input "Enter base directory" "$BASE_DIR")
-    SSHD_CONFIG=$(prompt_input "Enter sshd_config path" "$SSHD_CONFIG")
-    SFTP_GROUP=$(prompt_input "Enter SFTP group name" "$SFTP_GROUP")
-    NOLOGIN_SHELL=$(prompt_input "Enter nologin shell path" "$NOLOGIN_SHELL")
-    UPLOAD_DIR=$(prompt_input "Enter upload directory name" "$UPLOAD_DIR")
+  # Display current configuration
+  echo ""
+  echo -e "${BLUE}Current Configuration:${NC}"
+  echo "  Username:         $USERNAME"
+  echo "  Base Directory:   $BASE_DIR"
+  echo "  SFTP Group:       $SFTP_GROUP"
+  echo "  Upload Directory: $UPLOAD_DIR"
+  echo "  Nologin Shell:    $NOLOGIN_SHELL"
+  echo ""
+
+  # Ask if user wants to change configuration
+  if confirm_action "Would you like to change any settings?"; then
+    echo ""
+    BASE_DIR=$(prompt_input "Base directory" "$BASE_DIR")
+    SFTP_GROUP=$(prompt_input "SFTP group name" "$SFTP_GROUP")
+    UPLOAD_DIR=$(prompt_input "Upload directory name" "$UPLOAD_DIR")
+    NOLOGIN_SHELL=$(prompt_input "Nologin shell path" "$NOLOGIN_SHELL")
+    echo ""
   fi
 
   # Password - prompt or auto-generate
-  if [ -z "$PASSWORD" ] || [ "$INTERACTIVE" = true ]; then
+  if [ -z "$PASSWORD" ]; then
     echo "Leave password empty to auto-generate"
     PASSWORD=$(prompt_input "Enter password" "" "true")
   fi
@@ -411,9 +432,9 @@ add_user() {
 
   USER_HOME="$BASE_DIR/$USERNAME"
 
-  # Display summary
+  # Display final summary
   echo ""
-  echo -e "${BLUE}Summary:${NC}"
+  echo -e "${BLUE}Final Configuration:${NC}"
   echo "  Username:         $USERNAME"
   echo "  SFTP Group:       $SFTP_GROUP"
   echo "  Home Directory:   $USER_HOME"
@@ -493,21 +514,29 @@ delete_user() {
   # Apply defaults
   apply_defaults
 
-  # Prompt for missing values (username is always required)
-  if [ -z "$USERNAME" ] || [ "$INTERACTIVE" = true ]; then
+  # Prompt for username (always required)
+  if [ -z "$USERNAME" ]; then
     USERNAME=$(prompt_required "Enter username to delete")
   fi
 
-  # Interactive prompts
-  if [ "$INTERACTIVE" = true ]; then
-    BASE_DIR=$(prompt_input "Enter base directory" "$BASE_DIR")
+  # Display current configuration
+  echo ""
+  echo -e "${BLUE}Current Configuration:${NC}"
+  echo "  Username:       $USERNAME"
+  echo "  Base Directory: $BASE_DIR"
+  echo ""
+
+  # Ask if user wants to change configuration
+  if confirm_action "Would you like to change the base directory?"; then
+    BASE_DIR=$(prompt_input "Base directory" "$BASE_DIR")
+    echo ""
   fi
 
   USER_HOME="$BASE_DIR/$USERNAME"
 
-  # Display summary
+  # Display final summary
   echo ""
-  echo -e "${BLUE}Summary:${NC}"
+  echo -e "${BLUE}User to Delete:${NC}"
   echo "  Username:       $USERNAME"
   echo "  Home Directory: $USER_HOME"
   echo ""
