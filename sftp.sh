@@ -13,7 +13,16 @@
 #   -b, --basedir     Base directory for SFTP jail
 #   -f, --folder      Folder name within base directory
 #   -c, --config      Path to sshd_config file
+#   -s, --shell       Path to nologin shell
 #   -i, --interactive Run in fully interactive mode (prompt for all values)
+
+# =============================================================================
+# DEFAULT VALUES (can be overridden via arguments or environment variables)
+# =============================================================================
+DEFAULT_SSHD_CONFIG="${SFTP_SSHD_CONFIG:-/etc/ssh/sshd_config}"
+DEFAULT_BASE_DIR="${SFTP_BASE_DIR:-/sftp}"
+DEFAULT_NOLOGIN_SHELL="${SFTP_NOLOGIN_SHELL:-/usr/sbin/nologin}"
+DEFAULT_UPLOAD_DIR="${SFTP_UPLOAD_DIR:-uploads}"
 
 # Colors for output
 RED='\033[0;31m'
@@ -93,6 +102,8 @@ parse_args() {
   BASE_DIR=""
   FOLDER=""
   SSHD_CONFIG=""
+  NOLOGIN_SHELL=""
+  UPLOAD_DIR=""
   INTERACTIVE=false
 
   while [[ $# -gt 0 ]]; do
@@ -129,6 +140,14 @@ parse_args() {
         SSHD_CONFIG="$2"
         shift 2
         ;;
+      -s|--shell)
+        NOLOGIN_SHELL="$2"
+        shift 2
+        ;;
+      -d|--uploaddir)
+        UPLOAD_DIR="$2"
+        shift 2
+        ;;
       -i|--interactive)
         INTERACTIVE=true
         shift
@@ -159,18 +178,36 @@ show_help() {
   echo "  -passwd     Update password for an existing user"
   echo ""
   echo "Options:"
-  echo "  -u, --username    Username for SFTP account"
+  echo "  -u, --username    Username for SFTP account (required)"
   echo "  -p, --password    Password (auto-generated if not provided)"
-  echo "  -b, --basedir     Base directory for SFTP jail"
-  echo "  -f, --folder      Folder name within base directory (defaults to username)"
-  echo "  -c, --config      Path to sshd_config file"
+  echo "  -b, --basedir     Base directory for SFTP jail (default: $DEFAULT_BASE_DIR)"
+  echo "  -f, --folder      Folder name within base directory (default: username)"
+  echo "  -c, --config      Path to sshd_config file (default: $DEFAULT_SSHD_CONFIG)"
+  echo "  -s, --shell       Path to nologin shell (default: $DEFAULT_NOLOGIN_SHELL)"
+  echo "  -d, --uploaddir   Upload directory name (default: $DEFAULT_UPLOAD_DIR)"
   echo "  -i, --interactive Run in fully interactive mode"
   echo "  -h, --help        Show this help message"
   echo ""
+  echo "Environment Variables (override defaults):"
+  echo "  SFTP_BASE_DIR      Default base directory"
+  echo "  SFTP_SSHD_CONFIG   Default sshd_config path"
+  echo "  SFTP_NOLOGIN_SHELL Default nologin shell path"
+  echo "  SFTP_UPLOAD_DIR    Default upload directory name"
+  echo ""
   echo "Examples:"
-  echo "  sudo $0 -add -u john -b /sftp -c /etc/ssh/sshd_config"
+  echo "  # Add user with defaults (prompts for username only)"
+  echo "  sudo $0 -add -u john"
+  echo ""
+  echo "  # Add user with custom base directory"
+  echo "  sudo $0 -add -u john -b /data/sftp"
+  echo ""
+  echo "  # Add user in fully interactive mode"
   echo "  sudo $0 -add -i"
-  echo "  sudo $0 -delete -u john -b /sftp -c /etc/ssh/sshd_config"
+  echo ""
+  echo "  # Delete user"
+  echo "  sudo $0 -delete -u john"
+  echo ""
+  echo "  # Update password"
   echo "  sudo $0 -passwd -u john"
 }
 
@@ -179,31 +216,55 @@ add_user() {
   echo -e "${BLUE}=== Add SFTP User ===${NC}"
   echo ""
 
-  # Prompt for missing values
+  # Prompt for missing values (username is always required)
   if [ -z "$USERNAME" ] || [ "$INTERACTIVE" = true ]; then
     USERNAME=$(prompt_required "Enter username")
   fi
 
-  if [ -z "$BASE_DIR" ] || [ "$INTERACTIVE" = true ]; then
-    BASE_DIR=$(prompt_required "Enter base directory (e.g., /sftp, /programs)")
+  # Base directory - use default if not provided
+  if [ -z "$BASE_DIR" ]; then
+    BASE_DIR="$DEFAULT_BASE_DIR"
+  fi
+  if [ "$INTERACTIVE" = true ]; then
+    BASE_DIR=$(prompt_input "Enter base directory" "$BASE_DIR")
   fi
 
-  if [ -z "$FOLDER" ] || [ "$INTERACTIVE" = true ]; then
-    FOLDER=$(prompt_input "Enter folder name" "$USERNAME")
+  # Folder - defaults to username
+  if [ -z "$FOLDER" ]; then
+    FOLDER="$USERNAME"
+  fi
+  if [ "$INTERACTIVE" = true ]; then
+    FOLDER=$(prompt_input "Enter folder name" "$FOLDER")
   fi
 
-  if [ -z "$SSHD_CONFIG" ] || [ "$INTERACTIVE" = true ]; then
-    SSHD_CONFIG=$(prompt_required "Enter sshd_config path (e.g., /etc/ssh/sshd_config)")
+  # SSHD config - use default if not provided
+  if [ -z "$SSHD_CONFIG" ]; then
+    SSHD_CONFIG="$DEFAULT_SSHD_CONFIG"
+  fi
+  if [ "$INTERACTIVE" = true ]; then
+    SSHD_CONFIG=$(prompt_input "Enter sshd_config path" "$SSHD_CONFIG")
   fi
 
+  # Nologin shell - use default if not provided
+  if [ -z "$NOLOGIN_SHELL" ]; then
+    NOLOGIN_SHELL="$DEFAULT_NOLOGIN_SHELL"
+  fi
+  if [ "$INTERACTIVE" = true ]; then
+    NOLOGIN_SHELL=$(prompt_input "Enter nologin shell path" "$NOLOGIN_SHELL")
+  fi
+
+  # Upload directory - use default if not provided
+  if [ -z "$UPLOAD_DIR" ]; then
+    UPLOAD_DIR="$DEFAULT_UPLOAD_DIR"
+  fi
+  if [ "$INTERACTIVE" = true ]; then
+    UPLOAD_DIR=$(prompt_input "Enter upload directory name" "$UPLOAD_DIR")
+  fi
+
+  # Password - prompt or auto-generate
   if [ -z "$PASSWORD" ] || [ "$INTERACTIVE" = true ]; then
     echo "Leave password empty to auto-generate"
     PASSWORD=$(prompt_input "Enter password" "" "true")
-  fi
-
-  # Set folder to username if empty
-  if [ -z "$FOLDER" ]; then
-    FOLDER="$USERNAME"
   fi
 
   # Generate password if not provided
@@ -217,11 +278,13 @@ add_user() {
   # Display summary
   echo ""
   echo -e "${BLUE}Summary:${NC}"
-  echo "  Username:       $USERNAME"
-  echo "  Base Directory: $BASE_DIR"
-  echo "  Folder:         $FOLDER"
-  echo "  Home Directory: $USER_HOME"
-  echo "  SSHD Config:    $SSHD_CONFIG"
+  echo "  Username:         $USERNAME"
+  echo "  Base Directory:   $BASE_DIR"
+  echo "  Folder:           $FOLDER"
+  echo "  Home Directory:   $USER_HOME"
+  echo "  Upload Directory: $USER_HOME/$UPLOAD_DIR"
+  echo "  SSHD Config:      $SSHD_CONFIG"
+  echo "  Nologin Shell:    $NOLOGIN_SHELL"
   echo ""
 
   if ! confirm_action "Proceed with creating user?"; then
@@ -241,15 +304,22 @@ add_user() {
     exit 1
   fi
 
+  # Validate nologin shell exists
+  if [ ! -f "$NOLOGIN_SHELL" ]; then
+    echo -e "${RED}❌ Nologin shell not found: $NOLOGIN_SHELL${NC}"
+    echo -e "${YELLOW}   Try: /bin/false, /usr/bin/false, or /sbin/nologin${NC}"
+    exit 1
+  fi
+
   # Create user with no shell
-  useradd -M -d "$USER_HOME" -s /usr/sbin/nologin "$USERNAME"
+  useradd -M -d "$USER_HOME" -s "$NOLOGIN_SHELL" "$USERNAME"
   echo "$USERNAME:$PASSWORD" | chpasswd
 
   # Setup jail dirs
-  mkdir -p "$USER_HOME/uploads"
+  mkdir -p "$USER_HOME/$UPLOAD_DIR"
   chown root:root "$USER_HOME"
   chmod 755 "$USER_HOME"
-  chown "$USERNAME:$USERNAME" "$USER_HOME/uploads"
+  chown "$USERNAME:$USERNAME" "$USER_HOME/$UPLOAD_DIR"
 
   # Add SSHD config block
   if ! grep -q "Match User $USERNAME" "$SSHD_CONFIG"; then
@@ -257,7 +327,7 @@ add_user() {
 
 # SFTP config for $USERNAME
 Match User $USERNAME
-    ForceCommand internal-sftp -d uploads
+    ForceCommand internal-sftp -d $UPLOAD_DIR
     ChrootDirectory $USER_HOME
     PasswordAuthentication yes
     PermitTunnel no
@@ -274,7 +344,7 @@ EOF
   echo "======================================="
   echo "Username:       $USERNAME"
   echo "Password:       $PASSWORD"
-  echo "Home Directory: $USER_HOME/uploads"
+  echo "Home Directory: $USER_HOME/$UPLOAD_DIR"
   echo "======================================="
 }
 
@@ -283,26 +353,33 @@ delete_user() {
   echo -e "${BLUE}=== Delete SFTP User ===${NC}"
   echo ""
 
-  # Prompt for missing values
+  # Prompt for missing values (username is always required)
   if [ -z "$USERNAME" ] || [ "$INTERACTIVE" = true ]; then
     USERNAME=$(prompt_required "Enter username to delete")
   fi
 
-  if [ -z "$BASE_DIR" ] || [ "$INTERACTIVE" = true ]; then
-    BASE_DIR=$(prompt_required "Enter base directory (e.g., /sftp, /programs)")
+  # Base directory - use default if not provided
+  if [ -z "$BASE_DIR" ]; then
+    BASE_DIR="$DEFAULT_BASE_DIR"
+  fi
+  if [ "$INTERACTIVE" = true ]; then
+    BASE_DIR=$(prompt_input "Enter base directory" "$BASE_DIR")
   fi
 
-  if [ -z "$FOLDER" ] || [ "$INTERACTIVE" = true ]; then
-    FOLDER=$(prompt_input "Enter folder name" "$USERNAME")
-  fi
-
-  if [ -z "$SSHD_CONFIG" ] || [ "$INTERACTIVE" = true ]; then
-    SSHD_CONFIG=$(prompt_required "Enter sshd_config path (e.g., /etc/ssh/sshd_config)")
-  fi
-
-  # Set folder to username if empty
+  # Folder - defaults to username
   if [ -z "$FOLDER" ]; then
     FOLDER="$USERNAME"
+  fi
+  if [ "$INTERACTIVE" = true ]; then
+    FOLDER=$(prompt_input "Enter folder name" "$FOLDER")
+  fi
+
+  # SSHD config - use default if not provided
+  if [ -z "$SSHD_CONFIG" ]; then
+    SSHD_CONFIG="$DEFAULT_SSHD_CONFIG"
+  fi
+  if [ "$INTERACTIVE" = true ]; then
+    SSHD_CONFIG=$(prompt_input "Enter sshd_config path" "$SSHD_CONFIG")
   fi
 
   USER_HOME="$BASE_DIR/$FOLDER"
