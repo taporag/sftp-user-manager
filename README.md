@@ -22,7 +22,7 @@ A flexible, interactive bash script for managing SFTP-only user accounts with ch
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/sftp-user-manager.git
+git clone https://github.com/taporag/sftp-user-manager.git
 
 # Navigate to the directory
 cd sftp-user-manager
