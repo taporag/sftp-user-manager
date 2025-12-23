@@ -60,49 +60,74 @@ Enter choice [1-4]:
 #### Add a new SFTP user
 
 ```bash
-# With all arguments
-sudo ./sftp.sh -add -u <username> -b <base_dir> -c <sshd_config_path>
+# Simplest usage - uses all defaults (base: /sftp, config: /etc/ssh/sshd_config)
+sudo ./sftp.sh -add -u john
 
-# Example
-sudo ./sftp.sh -add -u john -b /sftp -c /etc/ssh/sshd_config
+# With custom base directory
+sudo ./sftp.sh -add -u john -b /data/sftp
 
 # With custom folder name
-sudo ./sftp.sh -add -u john -b /sftp -f john_files -c /etc/ssh/sshd_config
+sudo ./sftp.sh -add -u john -f john_files
 
 # With specific password
-sudo ./sftp.sh -add -u john -p "MySecurePass123" -b /sftp -c /etc/ssh/sshd_config
+sudo ./sftp.sh -add -u john -p "MySecurePass123"
+
+# Override all defaults
+sudo ./sftp.sh -add -u john -b /data/sftp -f john_home -c /etc/openssh/sshd_config -d files
 ```
 
 #### Delete an SFTP user
 
 ```bash
-sudo ./sftp.sh -delete -u <username> -b <base_dir> -c <sshd_config_path>
+# Uses defaults for base directory and config path
+sudo ./sftp.sh -delete -u john
 
-# Example
-sudo ./sftp.sh -delete -u john -b /sftp -c /etc/ssh/sshd_config
+# With custom base directory
+sudo ./sftp.sh -delete -u john -b /data/sftp
 ```
 
 #### Update user password
 
 ```bash
 # Auto-generate new password
-sudo ./sftp.sh -passwd -u <username>
+sudo ./sftp.sh -passwd -u john
 
 # Set specific password
-sudo ./sftp.sh -passwd -u <username> -p "NewPassword123"
+sudo ./sftp.sh -passwd -u john -p "NewPassword123"
 ```
 
 ### Options
 
-| Option | Long Form | Description |
-|--------|-----------|-------------|
-| `-u` | `--username` | Username for SFTP account |
-| `-p` | `--password` | Password (auto-generated if not provided) |
-| `-b` | `--basedir` | Base directory for SFTP jail |
-| `-f` | `--folder` | Folder name within base directory (defaults to username) |
-| `-c` | `--config` | Path to sshd_config file |
-| `-i` | `--interactive` | Force interactive mode for all prompts |
-| `-h` | `--help` | Show help message |
+| Option | Long Form | Default | Description |
+|--------|-----------|---------|-------------|
+| `-u` | `--username` | *(required)* | Username for SFTP account |
+| `-p` | `--password` | *(auto-generated)* | Password for the account |
+| `-b` | `--basedir` | `/sftp` | Base directory for SFTP jail |
+| `-f` | `--folder` | *(username)* | Folder name within base directory |
+| `-c` | `--config` | `/etc/ssh/sshd_config` | Path to sshd_config file |
+| `-s` | `--shell` | `/usr/sbin/nologin` | Path to nologin shell |
+| `-d` | `--uploaddir` | `uploads` | Upload directory name inside jail |
+| `-i` | `--interactive` | `false` | Force interactive mode for all prompts |
+| `-h` | `--help` | - | Show help message |
+
+### Environment Variables
+
+You can set these environment variables to override the defaults system-wide:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SFTP_BASE_DIR` | `/sftp` | Default base directory |
+| `SFTP_SSHD_CONFIG` | `/etc/ssh/sshd_config` | Default sshd_config path |
+| `SFTP_NOLOGIN_SHELL` | `/usr/sbin/nologin` | Default nologin shell path |
+| `SFTP_UPLOAD_DIR` | `uploads` | Default upload directory name |
+
+Example using environment variables:
+
+```bash
+export SFTP_BASE_DIR="/data/sftp"
+export SFTP_SSHD_CONFIG="/etc/openssh/sshd_config"
+sudo -E ./sftp.sh -add -u john
+```
 
 ## Directory Structure
 
@@ -114,7 +139,7 @@ When you create an SFTP user, the following structure is created:
     └── uploads/        # Owned by user (writable)
 ```
 
-Example with `sudo ./sftp.sh -add -u john -b /sftp`:
+Example with `sudo ./sftp.sh -add -u john`:
 
 ```
 /sftp/
